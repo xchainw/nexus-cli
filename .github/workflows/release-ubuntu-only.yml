@@ -1,0 +1,184 @@
+name: Ubuntu Only Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a GitHub release from the latest tag'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  RUSTUP_TOOLCHAIN: nightly-2025-04-06
+
+jobs:
+  build-docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: clients/cli
+          file: clients/cli/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            nexusxyz/nexus-cli:latest
+            nexusxyz/nexus-cli:${{ github.sha }}
+            nexusxyz/nexus-cli:${{ github.ref_name }}
+
+  build-linux-x86_64:
+    name: Build Linux (x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "clients/cli -> target"
+          cache-all-crates: "true"
+          cache-on-failure: "true"
+          key: "linux-x86_64"
+
+      - name: Install & Use `mold`
+        uses: rui314/setup-mold@v1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          targets: x86_64-unknown-linux-gnu
+          components: rustfmt
+
+      - name: Debug Environment
+        run: |
+          echo "OS: $(lsb_release -d)"
+          echo "Rust version: $(rustc --version --verbose)"
+          echo "Cargo version: $(cargo --version)"
+          echo "Host target: $(rustc -vV | grep host)"
+
+      - name: Build Linux x86_64 binary
+        working-directory: clients/cli
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+
+      - name: Rename binary
+        working-directory: clients/cli/target/x86_64-unknown-linux-gnu/release/
+        run: cp nexus-network nexus-network-linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-network-linux-x86_64
+          path: clients/cli/target/x86_64-unknown-linux-gnu/release/nexus-network-linux-x86_64
+
+  build-linux-arm64:
+    name: Build Linux (ARM64)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "clients/cli -> target"
+          cache-all-crates: "true"
+          cache-on-failure: "true"
+          key: "linux-arm64"
+
+      - name: Install & Use `mold`
+        uses: rui314/setup-mold@v1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
+          targets: aarch64-unknown-linux-gnu
+          components: rustfmt
+
+      - name: Ensure targets are installed
+        run: |
+          rustup target add aarch64-unknown-linux-gnu
+          rustup component add rust-src --toolchain ${{ env.RUSTUP_TOOLCHAIN }}
+
+      - name: Install ARM64 Linux linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Build Linux ARM64 binary
+        working-directory: clients/cli
+        run: |
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          cargo build -Zbuild-std=std,panic_abort --release --target aarch64-unknown-linux-gnu
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+
+      - name: Rename binary
+        working-directory: clients/cli/target/aarch64-unknown-linux-gnu/release/
+        run: cp nexus-network nexus-network-linux-arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-network-linux-arm64
+          path: clients/cli/target/aarch64-unknown-linux-gnu/release/nexus-network-linux-arm64
+
+  release:
+    name: Create Release
+    needs: [build-linux-x86_64, build-linux-arm64]
+    if: github.event.inputs.create_release == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: ls -lh artifacts/
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          for file in *; do
+            if [ -f "$file" ]; then
+              sha256sum "$file" | awk '{print $1}' > "$file.sha256"
+            fi
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/nexus-network-linux-x86_64
+            artifacts/nexus-network-linux-x86_64.sha256
+            artifacts/nexus-network-linux-arm64
+            artifacts/nexus-network-linux-arm64.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
