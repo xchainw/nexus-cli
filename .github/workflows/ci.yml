@@ -12,7 +12,7 @@ on:
 jobs:
   build:
     name: Build and Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04  # specify Ubuntu 22.04 to keep consistent with release configuration
 
     steps:
       - name: Checkout repository
