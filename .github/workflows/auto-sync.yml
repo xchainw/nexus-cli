@@ -1,0 +1,242 @@
+name: Smart Auto Sync and Release
+
+on:
+  schedule:
+    - cron: '0 2,14 * * *'  # check twice a day
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: 'upstream repository'
+        required: false
+        default: 'nexus-xyz/nexus-cli'
+      force_sync:
+        description: 'force sync (ignore conflicts)'
+        type: boolean
+        default: false
+      preserve_custom_workflows:
+        description: 'preserve custom workflows'
+        type: boolean
+        default: true
+
+env:
+  UPSTREAM_REPO: ${{ github.event.inputs.upstream_repo || 'nexus-xyz/nexus-cli' }}
+  
+jobs:
+  smart-sync:
+    name: Smart Sync with Conflict Resolution
+    runs-on: ubuntu-22.04
+    outputs:
+      sync_success: ${{ steps.sync.outputs.sync_success }}
+      conflicts_detected: ${{ steps.sync.outputs.conflicts_detected }}
+      new_tag: ${{ steps.check.outputs.new_tag }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "Smart Sync Bot"
+          git config user.email "action@github.com"
+
+      - name: Check upstream releases
+        id: check
+        run: |
+          echo "🔍 check upstream repository: ${{ env.UPSTREAM_REPO }}"
+          
+          # get upstream latest release
+          RELEASE_INFO=$(curl -s "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest")
+          UPSTREAM_TAG=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
+          CURRENT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
+          
+          echo "upstream version: $UPSTREAM_TAG"
+          echo "current version: $CURRENT_TAG"
+          
+          # check if sync is needed
+          if [ "$UPSTREAM_TAG" != "null" ] && [ "$UPSTREAM_TAG" != "$CURRENT_TAG" ]; then
+            echo "new_tag=$UPSTREAM_TAG" >> $GITHUB_OUTPUT
+            echo "should_sync=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.inputs.force_sync }}" = "true" ]; then
+            echo "new_tag=$UPSTREAM_TAG" >> $GITHUB_OUTPUT
+            echo "should_sync=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_sync=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Backup custom workflows
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          echo "📁 backup custom workflows..."
+          mkdir -p /tmp/custom_workflows
+          
+          # backup our custom files
+          CUSTOM_FILES=(
+            ".github/workflows/release-ubuntu-only.yml"
+            ".github/workflows/auto-sync-release.yml"
+            ".github/workflows/auto-sync-advanced.yml"
+            ".github/workflows/auto-sync-smart.yml"
+            ".github/workflows/ci.yml"
+          )
+          
+          for file in "${CUSTOM_FILES[@]}"; do
+            if [ -f "$file" ]; then
+              echo "backup: $file"
+              cp "$file" "/tmp/custom_workflows/$(basename "$file")"
+            fi
+          done
+          
+          # record original deleted files list
+          echo "📝 record deleted official files..."
+          echo "release.yml" > /tmp/deleted_official_files.txt
+
+      - name: Setup upstream and attempt merge
+        id: sync
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          echo "🔄 set upstream and attempt merge..."
+          git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git
+          git fetch upstream
+          
+          # switch to main branch
+          git checkout main
+          
+          # attempt auto merge
+          echo "🤝 attempt auto merge..."
+          if git merge upstream/main --no-edit; then
+            echo "✅ auto merge success"
+            echo "sync_success=true" >> $GITHUB_OUTPUT
+            echo "conflicts_detected=false" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ conflicts
+            echo "sync_success=false" >> $GITHUB_OUTPUT
+            echo "conflicts_detected=true" >> $GITHUB_OUTPUT
+            
+            # abort merge
+            git merge --abort
+          fi
+
+      - name: Smart conflict resolution
+        if: steps.sync.outputs.conflicts_detected == 'true'
+        run: |
+          echo "🧠 smart conflict resolution..."
+          
+          # strategy 1: use theirs strategy, but protect specific files
+          echo "📥 use upstream code, but protect custom configurations..."
+          
+          # first use all upstream changes
+          git merge upstream/main --strategy=recursive --strategy-option=theirs --no-edit
+          
+          # then restore official files we need to delete
+          echo "🗑️ restore official workflow files..."
+          if [ -f ".github/workflows/release.yml" ]; then
+            echo "delete official release.yml"
+            git rm -f ".github/workflows/release.yml"
+          fi
+          
+          echo "sync_success=true" >> $GITHUB_OUTPUT
+
+      - name: Restore custom workflows
+        if: steps.check.outputs.should_sync == 'true' && github.event.inputs.preserve_custom_workflows != 'false'
+        run: |
+          echo "📂 restore custom workflows..."
+          
+          # restore custom files
+          for backup_file in /tmp/custom_workflows/*; do
+            if [ -f "$backup_file" ]; then
+              filename=$(basename "$backup_file")
+              target_path=".github/workflows/$filename"
+              echo "restore: $target_path"
+              cp "$backup_file" "$target_path"
+            fi
+          done
+          
+          # add changes to git
+          git add .github/workflows/
+          
+          # check if there are changes to commit
+          if ! git diff --staged --quiet; then
+            git commit -m "🔧 Restore custom workflow configurations
+
+          - Restored custom workflow files after upstream merge
+          - Maintained fork-specific configurations
+          - Protected custom build and sync processes"
+          fi
+
+      - name: Push changes
+        if: steps.sync.outputs.sync_success == 'true'
+        run: |
+          echo "📤 push changes after sync..."
+          git push origin main
+
+      - name: Create release tag
+        if: steps.sync.outputs.sync_success == 'true' && steps.check.outputs.new_tag != ''
+        run: |
+          NEW_TAG="${{ steps.check.outputs.new_tag }}"
+          echo "🏷️ create
+          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+            git tag -d "$NEW_TAG"
+            git push origin ":refs/tags/$NEW_TAG" || true
+          fi
+          
+          # create new tag
+          git tag -a "$NEW_TAG" -m "🚀 Auto release $NEW_TAG
+
+          📋 From upstream: ${{ env.UPSTREAM_REPO }}
+          🤖 Auto-synced at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          🛠️ Custom Ubuntu build configuration maintained
+          ✅ Fork-specific optimizations preserved"
+          
+          git push origin "$NEW_TAG"
+
+  conflict-report:
+    name: Generate Conflict Report
+    needs: smart-sync
+    if: always()
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Generate detailed report
+        run: |
+          echo "# 🤖 smart sync report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ needs.smart-sync.outputs.sync_success }}" = "true" ]; then
+            echo "## ✅ sync success" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- 🎯 **sync status**: success" >> $GITHUB_STEP_SUMMARY
+            echo "- 🏷️ **new version**: \`${{ needs.smart-sync.outputs.new_tag }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- ⚠️ **conflict detection**: ${{ needs.smart-sync.outputs.conflicts_detected == 'true' && 'detected and resolved' || 'no conflicts' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- 🛡️ **custom configuration**: protected and restored" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔧 protected files" >> $GITHUB_STEP_SUMMARY
+            echo "- \`release-ubuntu-only.yml\` - Ubuntu build configuration" >> $GITHUB_STEP_SUMMARY
+            echo "- \`auto-sync-*.yml\` - auto sync configuration" >> $GITHUB_STEP_SUMMARY
+            echo "- \`ci.yml\` - continuous integration configuration" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🗑️ deleted official files" >> $GITHUB_STEP_SUMMARY
+            echo "- \`release.yml\` - deleted as expected" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ needs.smart-sync.outputs.new_tag }}" != "" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### 🚀 next step" >> $GITHUB_STEP_SUMMARY
+              echo "tag \`${{ needs.smart-sync.outputs.new_tag }}\` has been created, will trigger Ubuntu Release build." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "## ❌ sync failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "encountered issues that cannot be automatically resolved, manual intervention is required." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🛠️ manual resolution steps" >> $GITHUB_STEP_SUMMARY
+            echo "1. clone repository locally" >> $GITHUB_STEP_SUMMARY
+            echo "2. add upstream remote: \`git remote add upstream https://github.com/${{ env.UPSTREAM_REPO }}.git\`" >> $GITHUB_STEP_SUMMARY
+            echo "3. fetch upstream updates: \`git fetch upstream\`" >> $GITHUB_STEP_SUMMARY
+            echo "4. manually merge: \`git merge upstream/main\`" >> $GITHUB_STEP_SUMMARY
+            echo "5. push after resolving conflicts" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*report generated at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')*" >> $GITHUB_STEP_SUMMARY 
