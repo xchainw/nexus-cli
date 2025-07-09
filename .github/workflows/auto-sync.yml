@@ -2,7 +2,7 @@ name: Smart Auto Sync and Release
 
 on:
   schedule:
-    - cron: '0 2,14 * * *'  # check twice a day
+    - cron: '0 23,13 * * *'
   workflow_dispatch:
     inputs:
       upstream_repo:
@@ -75,9 +75,7 @@ jobs:
           # backup our custom files
           CUSTOM_FILES=(
             ".github/workflows/release-ubuntu-only.yml"
-            ".github/workflows/auto-sync-release.yml"
-            ".github/workflows/auto-sync-advanced.yml"
-            ".github/workflows/auto-sync-smart.yml"
+            ".github/workflows/auto-sync.yml"
             ".github/workflows/ci.yml"
           )
           
@@ -110,7 +108,7 @@ jobs:
             echo "sync_success=true" >> $GITHUB_OUTPUT
             echo "conflicts_detected=false" >> $GITHUB_OUTPUT
           else
-            echo "⚠️ conflicts
+            echo "⚠️ conflicts detected"
             echo "sync_success=false" >> $GITHUB_OUTPUT
             echo "conflicts_detected=true" >> $GITHUB_OUTPUT
             
@@ -129,8 +127,8 @@ jobs:
           # first use all upstream changes
           git merge upstream/main --strategy=recursive --strategy-option=theirs --no-edit
           
-          # then restore official files we need to delete
-          echo "🗑️ restore official workflow files..."
+          # then re-delete official files we need to keep deleted
+          echo "🗑️ re-delete official workflow files..."
           if [ -f ".github/workflows/release.yml" ]; then
             echo "delete official release.yml"
             git rm -f ".github/workflows/release.yml"
@@ -175,7 +173,9 @@ jobs:
         if: steps.sync.outputs.sync_success == 'true' && steps.check.outputs.new_tag != ''
         run: |
           NEW_TAG="${{ steps.check.outputs.new_tag }}"
-          echo "🏷️ create
+          echo "🏷️ create release tag: $NEW_TAG"
+          
+          # delete existing tag if exists
           if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
             git tag -d "$NEW_TAG"
             git push origin ":refs/tags/$NEW_TAG" || true
@@ -213,7 +213,7 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🔧 protected files" >> $GITHUB_STEP_SUMMARY
             echo "- \`release-ubuntu-only.yml\` - Ubuntu build configuration" >> $GITHUB_STEP_SUMMARY
-            echo "- \`auto-sync-*.yml\` - auto sync configuration" >> $GITHUB_STEP_SUMMARY
+            echo "- \`auto-sync.yml\` - smart auto sync configuration" >> $GITHUB_STEP_SUMMARY
             echo "- \`ci.yml\` - continuous integration configuration" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### 🗑️ deleted official files" >> $GITHUB_STEP_SUMMARY
