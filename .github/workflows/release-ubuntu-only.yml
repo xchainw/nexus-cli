@@ -104,7 +104,7 @@ jobs:
 
   build-linux-arm64:
     name: Build Linux (ARM64)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-arm
     steps:
       - name: Log parallel execution start
         run: |
@@ -120,7 +120,7 @@ jobs:
           workspaces: "clients/cli -> target"
           cache-all-crates: "true"
           cache-on-failure: "true"
-          key: "linux-arm64"
+          key: "linux-arm64-native"
 
       - name: Install & Use `mold`
         uses: rui314/setup-mold@v1
@@ -129,36 +129,31 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
-          targets: aarch64-unknown-linux-gnu
           components: rustfmt
 
-      - name: Ensure targets are installed
+      - name: Debug Environment
         run: |
-          rustup target add aarch64-unknown-linux-gnu
-          rustup component add rust-src --toolchain ${{ env.RUSTUP_TOOLCHAIN }}
+          echo "OS: $(lsb_release -d)"
+          echo "Rust version: $(rustc --version --verbose)"
+          echo "Cargo version: $(cargo --version)"
+          echo "Host target: $(rustc -vV | grep host)"
+          echo "Architecture: $(uname -m)"
 
-      - name: Install ARM64 Linux linker
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
-
-      - name: Build Linux ARM64 binary
+      - name: Build Linux ARM64 binary (native)
         working-directory: clients/cli
-        run: |
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-          cargo build -Zbuild-std=std,panic_abort --release --target aarch64-unknown-linux-gnu
+        run: cargo build --release
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
 
       - name: Rename binary
-        working-directory: clients/cli/target/aarch64-unknown-linux-gnu/release/
+        working-directory: clients/cli/target/release/
         run: cp nexus-network nexus-network-linux-arm64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: nexus-network-linux-arm64
-          path: clients/cli/target/aarch64-unknown-linux-gnu/release/nexus-network-linux-arm64
+          path: clients/cli/target/release/nexus-network-linux-arm64
 
   release:
     name: Create Release

@@ -178,7 +178,8 @@ jobs:
           # delete existing tag if exists
           if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
             git tag -d "$NEW_TAG"
-            git push origin ":refs/tags/$NEW_TAG" || true
+            # Use PAT to delete remote tag to trigger workflows
+            git push https://${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git ":refs/tags/$NEW_TAG" || true
           fi
           
           # create new tag
@@ -189,7 +190,15 @@ jobs:
           🛠️ Custom Ubuntu build configuration maintained
           ✅ Fork-specific optimizations preserved"
           
-          git push origin "$NEW_TAG"
+          # Use PAT to push tag to trigger other workflows (if available)
+          if [ -n "${{ secrets.PAT_TOKEN }}" ]; then
+            echo "📤 pushing tag with PAT to trigger release workflow..."
+            git push https://${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git "$NEW_TAG"
+          else
+            echo "⚠️ PAT_TOKEN not available, using default token (may not trigger release workflow)"
+            echo "💡 To fix: Add PAT_TOKEN to repository secrets"
+            git push origin "$NEW_TAG"
+          fi
 
   conflict-report:
     name: Generate Conflict Report
@@ -222,7 +231,16 @@ jobs:
             if [ "${{ needs.smart-sync.outputs.new_tag }}" != "" ]; then
               echo "" >> $GITHUB_STEP_SUMMARY
               echo "### 🚀 next step" >> $GITHUB_STEP_SUMMARY
-              echo "tag \`${{ needs.smart-sync.outputs.new_tag }}\` has been created, will trigger Ubuntu Release build." >> $GITHUB_STEP_SUMMARY
+              if [ -n "${{ secrets.PAT_TOKEN }}" ]; then
+                echo "✅ tag \`${{ needs.smart-sync.outputs.new_tag }}\` created with PAT - will trigger Ubuntu Release build" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "⚠️ tag \`${{ needs.smart-sync.outputs.new_tag }}\` created with default token - may NOT trigger release workflow" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+                echo "**🔧 Fix: Add PAT_TOKEN to repository secrets**" >> $GITHUB_STEP_SUMMARY
+                echo "1. Create Personal Access Token in GitHub Settings" >> $GITHUB_STEP_SUMMARY
+                echo "2. Add as repository secret named \`PAT_TOKEN\`" >> $GITHUB_STEP_SUMMARY
+                echo "3. Re-run this workflow to trigger release build" >> $GITHUB_STEP_SUMMARY
+              fi
             fi
           else
             echo "## ❌ sync failed" >> $GITHUB_STEP_SUMMARY
