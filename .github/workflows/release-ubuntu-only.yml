@@ -210,6 +210,23 @@ jobs:
           echo "Copying binary from target/$NATIVE_TARGET/release/"
           cp target/$NATIVE_TARGET/release/nexus-network target/$NATIVE_TARGET/release/nexus-network-linux-arm64
 
+      - name: Verify ARM64 binary location
+        working-directory: clients/cli
+        run: |
+          echo "🔍 Verifying ARM64 binary location:"
+          NATIVE_TARGET=$(rustc -vV | grep host | cut -d' ' -f2)
+          echo "Native target: $NATIVE_TARGET"
+          echo "Looking for binary at: target/$NATIVE_TARGET/release/nexus-network-linux-arm64"
+          
+          if [ -f "target/$NATIVE_TARGET/release/nexus-network-linux-arm64" ]; then
+            echo "✅ ARM64 binary found!"
+            ls -la "target/$NATIVE_TARGET/release/nexus-network-linux-arm64"
+          else
+            echo "❌ ARM64 binary NOT found!"
+            echo "Contents of target/$NATIVE_TARGET/release/:"
+            ls -la "target/$NATIVE_TARGET/release/" || echo "Directory does not exist"
+          fi
+
       - name: Restore cargo config files
         if: always()
         working-directory: clients/cli
@@ -224,11 +241,30 @@ jobs:
             mv programs/fib_input_initial/src/guest/.cargo/config.toml.bak programs/fib_input_initial/src/guest/.cargo/config.toml
           fi
 
+      - name: Prepare ARM64 artifact for upload
+        working-directory: clients/cli
+        run: |
+          NATIVE_TARGET=$(rustc -vV | grep host | cut -d' ' -f2)
+          echo "Preparing ARM64 artifact with target: $NATIVE_TARGET"
+          
+          # Create a staging directory for the artifact
+          mkdir -p upload-staging
+          
+          # Copy the binary to the staging directory
+          if [ -f "target/$NATIVE_TARGET/release/nexus-network-linux-arm64" ]; then
+            cp "target/$NATIVE_TARGET/release/nexus-network-linux-arm64" upload-staging/
+            echo "✅ ARM64 binary copied to staging directory"
+            ls -la upload-staging/
+          else
+            echo "❌ ARM64 binary not found at expected location"
+            exit 1
+          fi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: nexus-network-linux-arm64
-          path: clients/cli/target/*/release/nexus-network-linux-arm64
+          path: clients/cli/upload-staging/nexus-network-linux-arm64
 
   release:
     name: Create Release
@@ -259,6 +295,25 @@ jobs:
 
       - name: List downloaded artifacts
         run: ls -lh artifacts/
+
+      - name: Debug downloaded artifacts
+        run: |
+          echo "🔍 Detailed artifact analysis:"
+          echo "Artifacts directory contents:"
+          find artifacts -type f -exec ls -la {} \;
+          echo ""
+          echo "Expected files:"
+          echo "- nexus-network-linux-x86_64"
+          echo "- nexus-network-linux-arm64"
+          echo ""
+          echo "File verification:"
+          for file in "nexus-network-linux-x86_64" "nexus-network-linux-arm64"; do
+            if [ -f "artifacts/$file" ]; then
+              echo "✅ $file found ($(stat -c%s artifacts/$file) bytes)"
+            else
+              echo "❌ $file missing"
+            fi
+          done
 
       - name: Generate SHA256 checksums
         run: |
