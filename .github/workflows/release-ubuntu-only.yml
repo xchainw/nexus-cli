@@ -162,6 +162,19 @@ jobs:
           cargo clean
           echo "Cleaned build artifacts"
 
+      - name: Temporarily disable conflicting cargo configs
+        working-directory: clients/cli
+        run: |
+          # Temporarily rename cargo config files that set RISC-V targets
+          if [ -f "examples/.cargo/config.toml" ]; then
+            echo "Temporarily moving examples/.cargo/config.toml"
+            mv examples/.cargo/config.toml examples/.cargo/config.toml.bak
+          fi
+          if [ -f "programs/fib_input_initial/src/guest/.cargo/config.toml" ]; then
+            echo "Temporarily moving guest cargo config"
+            mv programs/fib_input_initial/src/guest/.cargo/config.toml programs/fib_input_initial/src/guest/.cargo/config.toml.bak
+          fi
+
       - name: Build Linux ARM64 binary (native)
         working-directory: clients/cli
         run: |
@@ -172,7 +185,8 @@ jobs:
           # Verify we're building for the native target
           echo "Building for native ARM64 target..."
           echo "Host architecture: $(uname -m)"
-          echo "Rust default target: $(rustc -vV | grep host | cut -d' ' -f2)"
+          NATIVE_TARGET=$(rustc -vV | grep host | cut -d' ' -f2)
+          echo "Rust default target: $NATIVE_TARGET"
           echo "Current working directory: $(pwd)"
           
           # Check for any cargo config that might affect the build
@@ -183,21 +197,38 @@ jobs:
           echo "Cargo environment:"
           cargo version --verbose
           
-          # Build without specifying any target (native compilation)
-          echo "Starting native ARM64 build..."
-          cargo build --release --verbose
+          # Build with explicit native target to override any config files
+          echo "Starting native ARM64 build with explicit target: $NATIVE_TARGET"
+          cargo build --release --target $NATIVE_TARGET --verbose
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
 
       - name: Rename binary
-        working-directory: clients/cli/target/release/
-        run: cp nexus-network nexus-network-linux-arm64
+        working-directory: clients/cli
+        run: |
+          NATIVE_TARGET=$(rustc -vV | grep host | cut -d' ' -f2)
+          echo "Copying binary from target/$NATIVE_TARGET/release/"
+          cp target/$NATIVE_TARGET/release/nexus-network target/$NATIVE_TARGET/release/nexus-network-linux-arm64
+
+      - name: Restore cargo config files
+        if: always()
+        working-directory: clients/cli
+        run: |
+          # Restore the temporarily moved cargo config files (always run, even if build fails)
+          if [ -f "examples/.cargo/config.toml.bak" ]; then
+            echo "Restoring examples/.cargo/config.toml"
+            mv examples/.cargo/config.toml.bak examples/.cargo/config.toml
+          fi
+          if [ -f "programs/fib_input_initial/src/guest/.cargo/config.toml.bak" ]; then
+            echo "Restoring guest cargo config"
+            mv programs/fib_input_initial/src/guest/.cargo/config.toml.bak programs/fib_input_initial/src/guest/.cargo/config.toml
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: nexus-network-linux-arm64
-          path: clients/cli/target/release/nexus-network-linux-arm64
+          path: clients/cli/target/*/release/nexus-network-linux-arm64
 
   release:
     name: Create Release
