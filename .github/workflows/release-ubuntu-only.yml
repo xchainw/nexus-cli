@@ -146,10 +146,46 @@ jobs:
           echo "Cargo version: $(cargo --version)"
           echo "Host target: $(rustc -vV | grep host)"
           echo "Architecture: $(uname -m)"
+          echo "Default target: $(rustc -vV | grep host | cut -d' ' -f2)"
+
+      - name: Clear any cross-compilation settings
+        run: |
+          # Ensure we're using native compilation
+          unset CARGO_BUILD_TARGET
+          unset CARGO_TARGET_DIR
+          echo "Cleared cross-compilation environment variables"
+
+      - name: Clean potential cross-compilation artifacts
+        working-directory: clients/cli
+        run: |
+          # Clean any existing build artifacts that might be from cross-compilation
+          cargo clean
+          echo "Cleaned build artifacts"
 
       - name: Build Linux ARM64 binary (native)
         working-directory: clients/cli
-        run: cargo build --release
+        run: |
+          # Ensure native compilation by clearing any target settings
+          unset CARGO_BUILD_TARGET
+          unset CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER
+          
+          # Verify we're building for the native target
+          echo "Building for native ARM64 target..."
+          echo "Host architecture: $(uname -m)"
+          echo "Rust default target: $(rustc -vV | grep host | cut -d' ' -f2)"
+          echo "Current working directory: $(pwd)"
+          
+          # Check for any cargo config that might affect the build
+          echo "Checking for .cargo/config.toml files that might affect build:"
+          find . -name "config.toml" -path "*/.cargo/*" -exec echo "Found: {}" \; -exec cat {} \;
+          
+          # Show cargo environment
+          echo "Cargo environment:"
+          cargo version --verbose
+          
+          # Build without specifying any target (native compilation)
+          echo "Starting native ARM64 build..."
+          cargo build --release --verbose
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
 
