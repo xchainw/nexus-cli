@@ -1,0 +1,72 @@
+name: Manual Release Trigger
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g., v0.9.6)'
+        required: true
+        default: 'v0.9.6'
+      create_release:
+        description: 'Create GitHub release'
+        type: boolean
+        default: true
+
+jobs:
+  trigger-release:
+    name: Trigger Release Workflow
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Verify tag exists
+        run: |
+          if ! git rev-parse "${{ github.event.inputs.tag_name }}" >/dev/null 2>&1; then
+            echo "❌ Tag ${{ github.event.inputs.tag_name }} does not exist"
+            exit 1
+          fi
+          echo "✅ Tag ${{ github.event.inputs.tag_name }} exists"
+
+      - name: Trigger release by re-pushing tag
+        if: github.event.inputs.create_release == 'true'
+        run: |
+          TAG="${{ github.event.inputs.tag_name }}"
+          echo "🏷️ Re-pushing tag: $TAG"
+          
+          # Delete and recreate the tag to trigger the release workflow
+          git tag -d "$TAG"
+          git tag -a "$TAG" -m "🚀 Manual release trigger for $TAG
+
+          📋 Manually triggered release
+          🤖 Triggered at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          🛠️ Ubuntu build configuration
+          ✅ Release creation enabled"
+          
+          # Push tag with PAT to trigger release workflow
+          if [ -n "${{ secrets.PAT_TOKEN }}" ]; then
+            echo "📤 Pushing tag with PAT..."
+            git push https://${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git "$TAG" --force
+          else
+            echo "⚠️ PAT_TOKEN not available, using default token"
+            git push origin "$TAG" --force
+          fi
+
+      - name: Report status
+        run: |
+          echo "# 🎯 Manual Release Trigger Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: \`${{ github.event.inputs.tag_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release Creation**: ${{ github.event.inputs.create_release }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Successfully triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Check [Actions](https://github.com/${{ github.repository }}/actions) for Ubuntu Release workflow" >> $GITHUB_STEP_SUMMARY
+          echo "2. Monitor build progress for both x86_64 and ARM64" >> $GITHUB_STEP_SUMMARY
+          echo "3. Verify release creation after successful builds" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*Manual trigger completed at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')*" >> $GITHUB_STEP_SUMMARY 
