@@ -27,24 +27,20 @@ pub enum TrackError {
     },
 }
 
-pub const STAGING_MEASUREMENT_ID: &str = "G-T0M0Q3V6WN";
-pub const BETA_MEASUREMENT_ID: &str = "G-GLH0GMEEFH";
-pub const STAGING_API_SECRET: &str = "OI7H53soRMSDWfJf1ittHQ";
-pub const BETA_API_SECRET: &str = "3wxu8FjVSPqOlxSsZEnBOw";
+pub const PRODUCTION_MEASUREMENT_ID: &str = "G-GLH0GMEEFH";
+pub const PRODUCTION_API_SECRET: &str = "3wxu8FjVSPqOlxSsZEnBOw";
 
 pub fn analytics_id(environment: &Environment) -> String {
     match environment {
-        Environment::Staging => STAGING_MEASUREMENT_ID.to_string(),
-        Environment::Beta => BETA_MEASUREMENT_ID.to_string(),
-        Environment::Local => String::new(),
+        Environment::Production => PRODUCTION_MEASUREMENT_ID.to_string(),
+        Environment::Custom { .. } => String::new(), // Disable analytics for custom environments
     }
 }
 
 pub fn analytics_api_key(environment: &Environment) -> String {
     match environment {
-        Environment::Staging => STAGING_API_SECRET.to_string(),
-        Environment::Beta => BETA_API_SECRET.to_string(),
-        Environment::Local => String::new(),
+        Environment::Production => PRODUCTION_API_SECRET.to_string(),
+        Environment::Custom { .. } => String::new(), // Disable analytics for custom environments
     }
 }
 
@@ -143,4 +139,130 @@ pub async fn track(
     }
 
     Ok(())
+}
+
+/// Track analytics for getting a task from orchestrator (non-blocking)
+pub async fn track_got_task(
+    task: &crate::task::Task,
+    environment: &Environment,
+    client_id: String,
+) {
+    let analytics_data = json!({
+        "program_name": task.program_id,
+        "task_id": task.task_id,
+    });
+
+    let _ = track(
+        vec!["cli_got_task".to_string(), "got_task".to_string()],
+        analytics_data,
+        environment,
+        client_id,
+    )
+    .await;
+    // TODO: Catch errors and log them
+}
+
+/// Track analytics for proof verification failure (non-blocking)
+pub async fn track_verification_failed(
+    task: &crate::task::Task,
+    error: &str,
+    environment: &Environment,
+    client_id: String,
+) {
+    let analytics_data = json!({
+        "program_name": task.program_id,
+        "task_id": task.task_id,
+        "error": error,
+    });
+
+    let _ = track(
+        vec![
+            "cli_local_verification_failed".to_string(),
+            "local_verification_failed".to_string(),
+        ],
+        analytics_data,
+        environment,
+        client_id,
+    )
+    .await;
+    // TODO: Catch errors and log them
+}
+
+/// Track analytics for proof submission error (non-blocking)
+pub async fn track_proof_submission_error(
+    task: &crate::task::Task,
+    error: &str,
+    status_code: Option<u16>,
+    environment: &Environment,
+    client_id: String,
+) {
+    let mut analytics_data = json!({
+        "program_name": task.program_id,
+        "task_id": task.task_id,
+        "error": error,
+    });
+
+    if let Some(status) = status_code {
+        analytics_data["status_code"] = json!(status);
+    }
+
+    let _ = track(
+        vec![
+            "cli_proof_submission_error".to_string(),
+            "proof_submission_error".to_string(),
+        ],
+        analytics_data,
+        environment,
+        client_id,
+    )
+    .await;
+    // TODO: Catch errors and log them
+}
+
+/// Track analytics for proof acceptance (non-blocking)
+pub async fn track_proof_accepted(
+    task: &crate::task::Task,
+    environment: &Environment,
+    client_id: String,
+) {
+    let analytics_data = json!({
+        "program_name": task.program_id,
+        "task_id": task.task_id,
+    });
+
+    let _ = track(
+        vec![
+            "cli_proof_accepted".to_string(),
+            "proof_accepted".to_string(),
+        ],
+        analytics_data,
+        environment,
+        client_id,
+    )
+    .await;
+    // TODO: Catch errors and log them
+}
+
+/// Track analytics for proof submission success (non-blocking)
+pub async fn track_proof_submission_success(
+    task: &crate::task::Task,
+    environment: &Environment,
+    client_id: String,
+) {
+    let analytics_data = json!({
+        "program_name": task.program_id,
+        "task_id": task.task_id,
+    });
+
+    let _ = track(
+        vec![
+            "cli_proof_submission_success".to_string(),
+            "proof_submission_success".to_string(),
+        ],
+        analytics_data,
+        environment,
+        client_id,
+    )
+    .await;
+    // TODO: Catch errors and log them
 }

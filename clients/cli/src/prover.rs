@@ -1,3 +1,5 @@
+use crate::analytics::track_verification_failed;
+use crate::environment::Environment;
 use crate::task::Task;
 use log::error;
 use nexus_sdk::Verifiable;
@@ -54,7 +56,11 @@ pub async fn prove_anonymously() -> Result<Proof, ProverError> {
 }
 
 /// Proves a program with a given node ID
-pub async fn authenticated_proving(task: &Task) -> Result<Proof, ProverError> {
+pub async fn authenticated_proving(
+    task: &Task,
+    environment: &Environment,
+    client_id: &str,
+) -> Result<Proof, ProverError> {
     let (view, proof, _) = match task.program_id.as_str() {
         "fast-fib" => {
             // fast-fib uses string inputs
@@ -66,20 +72,25 @@ pub async fn authenticated_proving(task: &Task) -> Result<Proof, ProverError> {
                 .map_err(|e| ProverError::Stwo(format!("Failed to run fast-fib prover: {}", e)))?;
             // We should verify the proof before returning it to the server
             // otherwise, the orchestrator can punish the worker for returning an invalid proof
-            proof
-                .verify_expected(
-                    &input,
-                    nexus_sdk::KnownExitCodes::ExitSuccess as u32,
-                    &(),
-                    &elf,
-                    &[],
-                )
-                .map_err(|e| {
-                    ProverError::Stwo(format!(
-                        "Failed to verify proof: {} for inputs: {:?}",
-                        e, input
-                    ))
-                })?;
+            match proof.verify_expected(
+                &input,
+                nexus_sdk::KnownExitCodes::ExitSuccess as u32,
+                &(),
+                &elf,
+                &[],
+            ) {
+                Ok(_) => {
+                    // Track analytics for proof validation success (non-blocking)
+                }
+                Err(e) => {
+                    let error_msg =
+                        format!("Failed to verify proof: {} for inputs: {:?}", e, input);
+                    // Track analytics for verification failure (non-blocking)
+                    track_verification_failed(task, &error_msg, environment, client_id.to_string())
+                        .await;
+                    return Err(ProverError::Stwo(error_msg));
+                }
+            }
             (view, proof, input)
         }
         "fib_input_initial" => {
@@ -93,20 +104,25 @@ pub async fn authenticated_proving(task: &Task) -> Result<Proof, ProverError> {
                 })?;
             // We should verify the proof before returning it to the server
             // otherwise, the orchestrator can punish the worker for returning an invalid proof
-            proof
-                .verify_expected::<(u32, u32, u32), ()>(
-                    &inputs, // three u32 inputs
-                    nexus_sdk::KnownExitCodes::ExitSuccess as u32,
-                    &(),  // no public output
-                    &elf, // expected elf (program binary)
-                    &[],  // no associated data,
-                )
-                .map_err(|e| {
-                    ProverError::Stwo(format!(
-                        "Failed to verify proof: {} for inputs: {:?}",
-                        e, inputs
-                    ))
-                })?;
+            match proof.verify_expected::<(u32, u32, u32), ()>(
+                &inputs, // three u32 inputs
+                nexus_sdk::KnownExitCodes::ExitSuccess as u32,
+                &(),  // no public output
+                &elf, // expected elf (program binary)
+                &[],  // no associated data,
+            ) {
+                Ok(_) => {
+                    // Track analytics for proof validation success (non-blocking)
+                }
+                Err(e) => {
+                    let error_msg =
+                        format!("Failed to verify proof: {} for inputs: {:?}", e, inputs);
+                    // Track analytics for verification failure (non-blocking)
+                    track_verification_failed(task, &error_msg, environment, client_id.to_string())
+                        .await;
+                    return Err(ProverError::Stwo(error_msg));
+                }
+            }
             (view, proof, inputs.0)
         }
         _ => {
