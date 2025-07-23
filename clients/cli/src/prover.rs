@@ -86,8 +86,12 @@ pub async fn authenticated_proving(
                     let error_msg =
                         format!("Failed to verify proof: {} for inputs: {:?}", e, input);
                     // Track analytics for verification failure (non-blocking)
-                    track_verification_failed(task, &error_msg, environment, client_id.to_string())
-                        .await;
+                    tokio::spawn(track_verification_failed(
+                        task.clone(),
+                        error_msg.clone(),
+                        environment.clone(),
+                        client_id.to_string(),
+                    ));
                     return Err(ProverError::Stwo(error_msg));
                 }
             }
@@ -118,8 +122,12 @@ pub async fn authenticated_proving(
                     let error_msg =
                         format!("Failed to verify proof: {} for inputs: {:?}", e, inputs);
                     // Track analytics for verification failure (non-blocking)
-                    track_verification_failed(task, &error_msg, environment, client_id.to_string())
-                        .await;
+                    tokio::spawn(track_verification_failed(
+                        task.clone(),
+                        error_msg.clone(),
+                        environment.clone(),
+                        client_id.to_string(),
+                    ));
                     return Err(ProverError::Stwo(error_msg));
                 }
             }
@@ -215,8 +223,13 @@ mod tests {
     #[tokio::test]
     // Proves a program with hardcoded inputs should succeed.
     async fn test_prove_anonymously() {
-        if let Err(e) = prove_anonymously().await {
-            panic!("Failed to prove anonymously: {}", e);
+        match prove_anonymously().await {
+            Ok(_) => {
+                // Success case - version requirements were met or couldn't be fetched
+            }
+            Err(e) => {
+                panic!("Failed to prove anonymously: {}", e);
+            }
         }
     }
 }

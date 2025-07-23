@@ -74,3 +74,6 @@ target/
 .DS_Store
 
 .idea
+
+# Generated files
+public/install.sh
