@@ -3,21 +3,18 @@
 //! Main orchestrator for authenticated and anonymous proving modes.
 //! Coordinates online workers (network I/O) and offline workers (computation).
 
-use crate::consts::prover::{EVENT_QUEUE_SIZE, RESULT_QUEUE_SIZE, TASK_QUEUE_SIZE};
+use crate::consts::prover::MAX_COMPLETED_TASKS;
 use crate::environment::Environment;
 use crate::events::Event;
 use crate::orchestrator::OrchestratorClient;
 use crate::task::Task;
 use crate::task_cache::TaskCache;
 use crate::version_checker::start_version_checker_task;
+use crate::workers::online::ProofResult;
 use crate::workers::{offline, online};
 use ed25519_dalek::SigningKey;
-use nexus_sdk::stwo::seq::Proof;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
-
-/// Maximum number of completed tasks to keep in memory. Chosen to be larger than the task queue size.
-const MAX_COMPLETED_TASKS: usize = 500;
 
 /// Starts authenticated workers that fetch tasks from the orchestrator and process them.
 pub async fn start_authenticated_workers(
@@ -31,7 +28,8 @@ pub async fn start_authenticated_workers(
 ) -> (mpsc::Receiver<Event>, Vec<JoinHandle<()>>) {
     let mut join_handles = Vec::new();
     // Worker events
-    let (event_sender, event_receiver) = mpsc::channel::<Event>(EVENT_QUEUE_SIZE);
+    let (event_sender, event_receiver) =
+        mpsc::channel::<Event>(crate::consts::prover::EVENT_QUEUE_SIZE);
 
     // Start version checker
     let version_checker_handle = {
@@ -48,7 +46,8 @@ pub async fn start_authenticated_workers(
     let enqueued_tasks = TaskCache::new(MAX_COMPLETED_TASKS);
 
     // Task fetching
-    let (task_sender, task_receiver) = mpsc::channel::<Task>(TASK_QUEUE_SIZE);
+    let (task_sender, task_receiver) =
+        mpsc::channel::<Task>(crate::consts::prover::TASK_QUEUE_SIZE);
     let verifying_key = signing_key.verifying_key();
     let fetch_prover_tasks_handle = {
         let orchestrator = orchestrator.clone();
@@ -75,7 +74,8 @@ pub async fn start_authenticated_workers(
     join_handles.push(fetch_prover_tasks_handle);
 
     // Workers
-    let (result_sender, result_receiver) = mpsc::channel::<(Task, Proof)>(RESULT_QUEUE_SIZE);
+    let (result_sender, result_receiver) =
+        mpsc::channel::<(Task, ProofResult)>(crate::consts::prover::RESULT_QUEUE_SIZE);
 
     let (worker_senders, worker_handles) = offline::start_workers(
         num_workers,
@@ -93,7 +93,7 @@ pub async fn start_authenticated_workers(
     join_handles.push(dispatcher_handle);
 
     // A bounded list of recently completed task IDs (prevents duplicate proof submissions)
-    let successful_tasks = TaskCache::new(MAX_COMPLETED_TASKS);
+    let completed_tasks = TaskCache::new(MAX_COMPLETED_TASKS);
 
     // Send proofs to the orchestrator
     let submit_proofs_handle = online::submit_proofs(
@@ -103,7 +103,7 @@ pub async fn start_authenticated_workers(
         result_receiver,
         event_sender.clone(),
         shutdown.resubscribe(),
-        successful_tasks.clone(),
+        completed_tasks.clone(),
         environment,
         client_id,
     )
@@ -122,7 +122,8 @@ pub async fn start_anonymous_workers(
 ) -> (mpsc::Receiver<Event>, Vec<JoinHandle<()>>) {
     let mut join_handles = Vec::new();
     // Worker events
-    let (event_sender, event_receiver) = mpsc::channel::<Event>(EVENT_QUEUE_SIZE);
+    let (event_sender, event_receiver) =
+        mpsc::channel::<Event>(crate::consts::prover::EVENT_QUEUE_SIZE);
 
     // Start version checker
     let version_checker_handle = {
@@ -191,7 +192,7 @@ mod tests {
         let (shutdown_sender, _) = broadcast::channel(1); // Only one shutdown signal needed
         let (event_sender, _event_receiver) = mpsc::channel::<Event>(100);
         let shutdown_receiver = shutdown_sender.subscribe();
-        let successful_tasks = TaskCache::new(MAX_COMPLETED_TASKS);
+        let submitted_tasks = TaskCache::new(MAX_COMPLETED_TASKS);
 
         let task_master_handle = tokio::spawn(async move {
             fetch_prover_tasks(
@@ -201,7 +202,7 @@ mod tests {
                 task_sender,
                 event_sender,
                 shutdown_receiver,
-                successful_tasks,
+                submitted_tasks,
                 crate::environment::Environment::Production,
                 "test-client-id".to_string(),
             )

@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 const CONFIG_URL: &str = "https://cli.nexus.xyz/version.json";
-// For testing error messages, uncomment the line below:
-// const CONFIG_URL: &str = "https://cli.nexus.xyz/nonexistent.json";
+const FALLBACK_CONFIG_URL: &str =
+    "https://raw.githubusercontent.com/nexus-xyz/nexus-cli/refs/heads/main/public/version.json";
 const CONFIG_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Error, Debug)]
@@ -51,7 +51,7 @@ pub struct VersionCheckResult {
 }
 
 impl VersionRequirements {
-    /// Fetch version requirements from the remote config file
+    /// Fetch version requirements from the remote config file with fallback to GitHub
     pub async fn fetch() -> Result<Self, VersionRequirementsError> {
         let client = Client::builder()
             .timeout(CONFIG_TIMEOUT)
@@ -59,8 +59,29 @@ impl VersionRequirements {
             .build()
             .expect("Failed to create HTTP client");
 
+        // Try primary URL first
+        match Self::fetch_from_url(&client, CONFIG_URL).await {
+            Ok(config) => Ok(config),
+            Err(primary_error) => {
+                // If primary URL fails, try GitHub fallback
+                match Self::fetch_from_url(&client, FALLBACK_CONFIG_URL).await {
+                    Ok(config) => Ok(config),
+                    Err(fallback_error) => {
+                        // Return the primary error but include fallback info
+                        Err(VersionRequirementsError::Fetch(format!(
+                            "Failed to fetch from primary URL ({}): {}. Also failed to fetch from fallback URL ({}): {}",
+                            CONFIG_URL, primary_error, FALLBACK_CONFIG_URL, fallback_error
+                        )))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fetch version requirements from a specific URL
+    async fn fetch_from_url(client: &Client, url: &str) -> Result<Self, VersionRequirementsError> {
         let response = client
-            .get(CONFIG_URL)
+            .get(url)
             .send()
             .await
             .map_err(|e| VersionRequirementsError::Fetch(e.to_string()))?;
